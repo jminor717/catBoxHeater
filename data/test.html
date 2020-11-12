@@ -1,0 +1,75 @@
+<!DOCTYPE html><html><head>
+<meta name="viewport"content="width=device-width,initial-scale=1.0,user-scalable=no">
+<link rel="manifest"href="/manifest.webmanifest">
+<link rel='icon'sizes='192x192'href='/android-chrome-192x192.png'>
+<meta name="apple-mobile-web-app-capable"content="yes">
+<meta name="apple-mobile-web-app-status-bar-style"content="black">
+<meta name="apple-mobile-web-app-title"content="Cat Box">
+<link rel="apple-touch-icon"href="/apple-touch-icon.png">
+<meta name="description"content="an app to control the cat box">
+<meta name="theme-color"content="#2F3BA2"/><title>CatBox</title><style>
+html{font-family:Helvetica;display:inline-block;margin:0px auto;text-align:center;}body{margin-top:50px;}h1{color:#444444;margin:50px auto 30px;}h3{color:#444444;margin-bottom:50px;}
+.BU{display:block;width:80px;background-color:#3498db;color:white;padding:13px 30px;font-size:25px;margin:0px auto 35px;cursor:pointer;border-radius:4px;}
+.BN{background-color:#3498db;}
+.BN:active{background-color:#2980b9;}
+.BF{background-color:#34495e;}
+.BF:active{background-color:#2c3e50;}
+p{font-size:14px;color:#888;margin-bottom:10px;}
+.GC{display:grid;grid-template-columns:fit-content(40%) fit-content(40%);grid-template-rows:auto;width:min-content;margin:auto;}
+.GI{margin:0px 5px 0px 5px;Padding:5px 0px 5px 0px;}
+.a{text-align:right;white-space:pre;}
+.b{text-align:left;}</style></head><body><h1>CatBox</h1>
+<div class="GC">
+<div class="GI a">front heater:</div><div class="GI b"id="FH">off</div>
+<div class="GI a">rear heater:</div><div class="GI b"id="RH">off</div>
+<div class="GI a">front heater temp:</div><div class="GI b"id="FT">-1</div>
+<div class="GI a">rear heater temp:</div><div class="GI b"id="RT">-1</div>
+<div class="GI a">front weight 1:</div><div class="GI b"id="FW1">-1</div>
+<div class="GI a">front weight 2:</div><div class="GI b"id="FW2">-1</div>
+<div class="GI a">front weight 3:</div><div class="GI b"id="FW3">-1</div>
+<div class="GI a">rear weight 1:</div><div class="GI b"id="RW1">-1</div>
+<div class="GI a">rear weight 2:</div><div class="GI b"id="RW2">-1</div>
+<div class="GI a">rear weight 3:</div><div class="GI b"id="RW3">-1</div>
+</div>
+<p id="b1L">Heater Override: OFF<p id="b1H" style="visibility:hidden;height:0px;">remaining time: -1</p></p><a onclick="BtC(this)"id="b1"class="BU BN">ON</a>
+<p id="b2L">calibrate for empty weight</p><a onclick="BtcC(this)"id="b1"class="BU BN">calibrate</a>
+</body><script>
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('service-worker.js',{scope:'/'}).then((reg)=>console.log('SW registered.',reg)).catch(er => console.log(er)));
+var DA={},int=undefined,run=false;
+function PT(a){var b=Math.floor(a/1E3%60),c=Math.floor(a/6E4%60);a=Math.floor(a/36E5%24);return(10>a?"0"+a:a)+":"+(10>c?"0"+c:c)+":"+(10>b?"0"+b:b)}
+function BtcC(O){fetch('/calibrate').catch().then(rP=>rP.json()).then(te=>{console.log(te)}).catch()}
+
+function BtC(O) {
+if(run)return;run=true;
+let N="ON",F="OFF",J=O.textContent===N,L=document.querySelector('#'+O.id+"L");
+let V=L.textContent.split(":")[0];
+if(J){L.textContent=V+": "+N;O.textContent=F;O.className="BU BF";
+}else{L.textContent=V+": "+F;O.textContent=N;O.className="BU BN";}
+fetch(`/override${J?N:F}`).then(rP=>rP.text()).then(te => {
+time=JSON.parse(te).time;
+let I=O.id+"H";DA[I]=time;
+let H=document.querySelector('#'+I);
+let Q=H.textContent.split(":")[0];
+if (int) clearInterval(int);
+if(J){
+H.textContent=Q+": "+PT(DA[I]);
+H.style="visibility:visible;height:auto;";
+int=setInterval(function(TID){
+if(DA[I]<3000)BtC(O);DA[I]-=1000;
+let H1=document.querySelector('#'+TID);
+let Q1=H1.textContent.split(":")[0];
+H1.textContent=Q1+": "+PT(DA[I])
+}.bind(this,I),1000)
+}else{
+H.style="visibility:hidden;height:0px;"
+}}).finally(run=false)}
+
+setInterval(() => {fetch(`/catData`).then(rP=>rP.json()).catch().then(te=>{
+console.log(te)
+for (let ke in te) {
+if (te.hasOwnProperty(ke)){
+if(document.getElementById(ke)){
+if(ke=="FT"||ke=="RT"){document.getElementById(ke).textContent=Math.floor(((te[ke]/16.0)*1.8+32.0)*10)/10;
+}else{document.getElementById(ke).textContent= te[ke] /*Math.floor(((te[ke]/54_216.0)*12)*100)/100.0;*/}
+}}}}).catch()}, 1000)
+</script></html>
