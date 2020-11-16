@@ -30,6 +30,8 @@ p{font-size:14px;color:#888;margin-bottom:10px;}
 <div class="GI a">rear weight 1:</div><div class="GI b"id="RW1">-1</div>
 <div class="GI a">rear weight 2:</div><div class="GI b"id="RW2">-1</div>
 <div class="GI a">rear weight 3:</div><div class="GI b"id="RW3">-1</div>
+<div class="GI a">front heater D%:</div><div class="GI b"id="FD">-1</div>
+<div class="GI a">rear Heater D%:</div><div class="GI b"id="RD">-1</div>
 </div>
 <p id="b1L">Heater Override: OFF<p id="b1H" style="visibility:hidden;height:0px;">remaining time: -1</p></p><a onclick="BtC(this)"id="b1"class="BU BN">ON</a>
 <p id="b2L">calibrate for empty weight</p><a onclick="BtcC(this)"id="b1"class="BU BN">calibrate</a>
@@ -55,7 +57,7 @@ if(J){
 H.textContent=Q+": "+PT(DA[I]);
 H.style="visibility:visible;height:auto;";
 int=setInterval(function(TID){
-if(DA[I]<3000)BtC(O);DA[I]-=1000;
+DA[I]-=1000;
 let H1=document.querySelector('#'+TID);
 let Q1=H1.textContent.split(":")[0];
 H1.textContent=Q1+": "+PT(DA[I])
@@ -64,12 +66,13 @@ H1.textContent=Q1+": "+PT(DA[I])
 H.style="visibility:hidden;height:0px;"
 }}).finally(run=false)}
 
-setInterval(() => {fetch(`/catData`).then(rP=>rP.json()).catch().then(te=>{
+setInterval(() => {try{fetch(`/catData`).then(rP=>rP.json()).then(te=>{
 console.log(te)
 for (let ke in te) {
 if (te.hasOwnProperty(ke)){
 if(document.getElementById(ke)){
 if(ke=="FT"||ke=="RT"){document.getElementById(ke).textContent=Math.floor(((te[ke]/16.0)*1.8+32.0)*10)/10;
+}else if(ke=="FD"||ke=="RD"){document.getElementById(ke).textContent=Math.floor(((8000-te[ke])/8000)*100)
 }else{document.getElementById(ke).textContent= te[ke] /*Math.floor(((te[ke]/54_216.0)*12)*100)/100.0;*/}
-}}}}).catch()}, 1000)
+}}}})}catch(e){console.log(`fetch data err: ${e}`)}}, 5000);
 </script></html>

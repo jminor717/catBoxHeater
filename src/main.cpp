@@ -9,39 +9,50 @@
 #include "freertos/timers.h"
 #include <EEPROM.h>
 #include "myConfig.hpp"
+#include "esp_timer.h"
+#include "esp_sleep.h"
+#include "..\lib\DNSServer---esp32\src\DNSServer.h"
 
 #define maxDelay 8 //ms  120⁻¹ longet delay between zcd and on high
 #define EEPROM_SIZE 12
 
 WebServer server(80);
 
+// DNS server
+const byte DNS_PORT = 53;
+DNSServer dnsServer;
+
 ADS1256 ads;
 
 const int32_t fullyOnDelay = 0;
-const int32_t fullyOffDelay = 8000;
+const int32_t fullyOffDelay = 7500;
+const int32_t CatWeightThreshold = 2000;
 /** 
  * 5 deg f ~= 40
  * by 5 deg off target should be full on or off
  * Gain = 100   with a 4000 offset to center the output
 */
 const int16_t Gain = 100;
-const int16_t Offset = 4000;
-int32_t FrontHeatDelayUs = 8000;
-int32_t RearHeatDelayUs = 8000;
+const int16_t Offset = fullyOffDelay / 2;
+int32_t FrontHeatDelayUs = fullyOffDelay;
+int32_t RearHeatDelayUs = fullyOffDelay;
+bool IsOn = false;
+bool outputSet = false;
 int32_t frontWeight = 0;
 int32_t RearWeight = 0;
 bool overrideActive = false;
 int32_t OverrideActiveForS = 0;
 
 int16_t FW1, FW2, FW3, RW1, RW2, RW3;
+int16_t FT, AT;
 Intbuffer FW1buffer(20), FW2buffer(20), FW3buffer(20), RW1buffer(20), RW2buffer(20), RW3buffer(20);
 uint16_t FW1CalEmpty = 1000, FW2CalEmpty = 1000, FW3CalEmpty = 1000, RW1CalEmpty = 1000, RW2CalEmpty = 1000, RW3CalEmpty = 1000;
 
-Tempsensor FrontTempSense(FrontTemp); //working
-Tempsensor RearTempSense(RearTemp);
+Tempsensor FrontTempSense(FrontTemp);
+Tempsensor AmbientTempSense(AmbientTemp);
 //Tempsensor AmbientTempSense(AmbientTemp);
 
-Tempbuffer FrontTempbuffer(20), RearTempbuffer(20), AmbientTempbuffer(20);
+Tempbuffer FrontTempbuffer(20), AmbientTempbuffer(20);
 
 bool zeroCrossed = false;
 
@@ -49,19 +60,33 @@ bool zeroCrossed = false;
 TimerHandle_t xTimers[NUM_TIMERS];
 
 uint32_t FT_id = 0;
-uint32_t RT_id = 1;
+uint32_t AT_id = 1;
 uint32_t Calculate_id = 2;
 
 bool measureFrontTemp = false;
-bool measureRearTemp = false;
+bool measureAmbientTemp = false;
 bool DoCalculate = false;
 
 //celsius = (float)raw / 16.0;
 //fahrenheit = celsius * 1.8 + 32.0;
+//((80 -32)/1.8)*16=427
 //((60 -32)/1.8)*16=250
 //((35 -32)/1.8)*16=27
 const int16_t activeTemp = 250;
 const int16_t idleTemp = 27;
+const int16_t HeaterMaxTemp = 427;
+
+const int8_t GainArrLength = 46;
+const int8_t SinGain[GainArrLength] = {
+    20, 20, 20, 20, 21, 21, 21,
+    22, 23, 23, 24, 25, 26, 27,
+    28, 29, 30, 31, 33, 34, 36,
+    37, 39, 40, 42, 44, 45, 47,
+    49, 51, 53, 55, 57, 59, 61,
+    63, 65, 67, 69, 71, 73, 75,
+    77, 79, 82, 84};
+
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
 void TimerCallback(TimerHandle_t xTimer)
 {
@@ -71,9 +96,9 @@ void TimerCallback(TimerHandle_t xTimer)
     {
         measureFrontTemp = true;
     }
-    else if (Timer_id == RT_id)
+    else if (Timer_id == AT_id)
     {
-        measureRearTemp = true;
+        measureAmbientTemp = true;
     }
     else if (Timer_id == Calculate_id)
     {
@@ -82,7 +107,7 @@ void TimerCallback(TimerHandle_t xTimer)
 }
 
 TickType_t measureFrontTempTicks = pdMS_TO_TICKS(1000);
-TickType_t measureRearTempTicks = pdMS_TO_TICKS(1000);
+TickType_t measureAmbientTempTicks = pdMS_TO_TICKS(1000);
 #define CalculateMs 2000
 #define Calculates 2
 TickType_t DoCalculateTicks = pdMS_TO_TICKS(CalculateMs);
@@ -142,7 +167,7 @@ void overrideOFF()
 
 void sendData()
 {
-    server.send(200, "application/json", "{\"RD\": " + String(RearHeatDelayUs) + ",\"FD\": " + String(FrontHeatDelayUs) + ",\"FW1\": " + String(FW1) + ",\"FW2\":" + String(FW2) + ",\"FW3\":" + String(FW3) + ",\"RW1\":" + String(RW1) + ",\"RW2\":" + String(RW2) + ",\"RW3\":" + String(RW3) + ",\"FT\":" + String(FrontTempbuffer.buffer[FrontTempbuffer.head]) + ",\"RT\":" + String(RearTempbuffer.buffer[RearTempbuffer.head]) + ",\"FTT\":" + String(FrontTempbuffer.lastUpdated) + ",\"RTT\":" + String(RearTempbuffer.lastUpdated) + "}");
+    server.send(200, "application/json", "{\"RD\": " + String(RearHeatDelayUs) + ",\"FD\": " + String(FrontHeatDelayUs) + ",\"FW1\": " + String(FW1) + ",\"FW2\":" + String(FW2) + ",\"FW3\":" + String(FW3) + ",\"RW1\":" + String(RW1) + ",\"RW2\":" + String(RW2) + ",\"RW3\":" + String(RW3) + ",\"FT\":" + String(FrontTempbuffer.buffer[FrontTempbuffer.head]) + ",\"RT\":" + String(AmbientTempbuffer.buffer[AmbientTempbuffer.head]) + ",\"FTT\":" + String(FrontTempbuffer.lastUpdated) + ",\"RTT\":" + String(AmbientTempbuffer.lastUpdated) + "}");
 }
 
 void handle_NotFound()
@@ -232,20 +257,7 @@ void collectData(void *parameter)
         RW1buffer.push(ads.adcValues[3]);
         RW2buffer.push(ads.adcValues[4]);
         RW3buffer.push(ads.adcValues[5]);
-        Serial.print("val  FW1:");
-        Serial.print(ads.adcValues[0]);
-        Serial.print(" FW2:");
-        Serial.print(ads.adcValues[1]);
-        Serial.print(" FW3:");
-        Serial.print(ads.adcValues[2]);
-        Serial.print(" RW1:");
-        Serial.print(ads.adcValues[3]);
-        Serial.print(" RW2:");
-        Serial.print(ads.adcValues[4]);
-        Serial.print(" RW3:");
-        Serial.print(ads.adcValues[5]);
-        Serial.println();
-        delay(50);
+        vTaskDelay(50);
     }
 }
 
@@ -261,31 +273,37 @@ void clampValue(int32_t &val, int32_t max, int32_t min)
     }
 }
 
+int8_t getGain(int32_t tempDifferential)
+{
+    //SinGain
+    tempDifferential = std::abs(tempDifferential);
+    clampValue(tempDifferential, GainArrLength - 1, 0);
+    return SinGain[tempDifferential];
+}
+
 void RTLoop(void *parameter)
 {
     for (;;)
     { // infinite loop
-        if (zeroCrossed)
-        {
-            zeroCrossed = false;
-        }
         if (measureFrontTemp)
         {
 
             measureFrontTemp = false;
             int16_t sssss = FrontTempSense.read();
-            if (sssss > -1000 && sssss < 2000)
+            int16_t diff = sssss > FT ? sssss - FT : FT - sssss;
+            if ((sssss > -1000 && sssss < 2000) && (diff < 50 || FrontTempbuffer.size < FrontTempbuffer.maxsize))
             {
                 FrontTempbuffer.push(sssss, xTaskGetTickCount());
             }
         }
-        if (measureRearTemp)
+        if (measureAmbientTemp)
         {
-            measureRearTemp = false;
-            int16_t sssss = RearTempSense.read();
-            if (sssss > -1000 && sssss < 2000)
+            measureAmbientTemp = false;
+            int16_t sssss = AmbientTempSense.read();
+            int16_t diff = sssss > FT ? sssss - FT : FT - sssss;
+            if ((sssss > -1000 && sssss < 2000) && (diff < 50 || AmbientTempbuffer.size < AmbientTempbuffer.maxsize))
             {
-                RearTempbuffer.push(sssss, xTaskGetTickCount());
+                AmbientTempbuffer.push(sssss, xTaskGetTickCount());
             }
         }
         if (DoCalculate)
@@ -298,11 +316,13 @@ void RTLoop(void *parameter)
             RW2 = RW2CalEmpty - RW2buffer.GetRunningAverage();
             RW3 = RW3CalEmpty - RW3buffer.GetRunningAverage();
 
-            int16_t FT = FrontTempbuffer.GetRunningAverage();
-
-            uint16_t FW = ((FW1 + FW2 + FW3) / 3), RW = ((RW1 + RW2 + RW3) / 3);
+            FT = FrontTempbuffer.GetRunningAverage();
+            AT = AmbientTempbuffer.GetRunningAverage();
+            int16_t FW = ((FW1 + FW2 + FW3) / 3), RW = ((RW1 + RW2 + RW3) / 3);
             bool CatPresent = false;
             int16_t TargetTemp = idleTemp;
+
+            CatPresent = (FW > CatWeightThreshold || RW > CatWeightThreshold);
 
             if (overrideActive || CatPresent)
             { //cat is present
@@ -317,22 +337,134 @@ void RTLoop(void *parameter)
 
             //temp feedback location
             // 5 deg f ~= 40
-            FrontHeatDelayUs = ((FT - TargetTemp) * Gain) + Offset; // inverted feedback because higher delay means lower duty cycle
+            int32_t FeedbackLoopMat = FT - TargetTemp; // inverted feedback because higher delay means lower duty cycle
+            int32_t matGain = getGain(FeedbackLoopMat);
+            FeedbackLoopMat = (FeedbackLoopMat * matGain) + Offset;
+
+            int32_t FeedbackLoopAmbient = AT - TargetTemp; // inverted feedback because higher delay means lower duty cycle
+            int32_t AmbientGain = getGain(FeedbackLoopAmbient);
+            FeedbackLoopAmbient = (FeedbackLoopAmbient * AmbientGain) + Offset;
+
+            clampValue(FeedbackLoopAmbient, fullyOffDelay, fullyOnDelay);
+            clampValue(FeedbackLoopMat, fullyOffDelay, fullyOnDelay);
             //ideally gain would be variable because a small change close to 50% duty cycle will have a larger impact on the output power than the same change closer to 0 or 100
-            RearHeatDelayUs = FrontHeatDelayUs;
 
-            
+            if (FT >= HeaterMaxTemp)
+            {
+                FeedbackLoopMat = 8000;
+                FeedbackLoopAmbient = 8000;
+            }
+            portENTER_CRITICAL_ISR(&timerMux); //if we get an interrupt durring this assignment could be bad
+            RearHeatDelayUs = FrontHeatDelayUs = FeedbackLoopMat;
+            portEXIT_CRITICAL_ISR(&timerMux);
+
+            TickType_t now = xTaskGetTickCount();
+
+            if (now - FrontTempbuffer.lastUpdated > 30000)
+            {
+                FrontTempSense = Tempsensor(FrontTemp);
+            }
+            if (now - AmbientTempbuffer.lastUpdated > 30000)
+            {
+                AmbientTempSense = Tempsensor(AmbientTemp);
+            }
             //clamp output from feedback loop
-            clampValue(RearHeatDelayUs, fullyOffDelay, fullyOnDelay);
-            clampValue(FrontHeatDelayUs, fullyOffDelay, fullyOnDelay);
+            //clampValue(RearHeatDelayUs, fullyOffDelay, fullyOnDelay);
+            //clampValue(FrontHeatDelayUs, fullyOffDelay, fullyOnDelay);
+            Serial.print("   frontUp: ");
+            Serial.print(now - FrontTempbuffer.lastUpdated);
+            Serial.print("   AmbUp: ");
+            Serial.print(now - AmbientTempbuffer.lastUpdated);
 
+            Serial.print("       fw: ");
+            Serial.print(FW);
+            Serial.print("  rw: ");
+            Serial.print(RW);
+
+            Serial.print("   delay: ");
+            Serial.println(FrontHeatDelayUs);
         }
     }
 }
 
+static void Turn_On_callback(void *arg);
+static void Turn_Off_callback(void *arg);
+static void nop_callback(void *arg);
+esp_timer_handle_t Turn_On_timer;
+esp_timer_handle_t Turn_Off_timer;
+esp_timer_handle_t Nop_timer;
+
+static void Turn_On_callback(void *arg)
+{
+    digitalWrite(FrontHeaterCTRL, HIGH);
+    digitalWrite(RearHeaterCTRL, HIGH);
+
+    esp_timer_create_args_t Turn_Off_timer_args;
+    Turn_Off_timer_args.callback = &Turn_Off_callback;
+    Turn_Off_timer_args.name = "TurnOff";
+    ESP_ERROR_CHECK(esp_timer_create(&Turn_Off_timer_args, &Turn_Off_timer));
+    int32_t onTime = (fullyOffDelay - FrontHeatDelayUs) - 2000;
+
+    clampValue(onTime, 5000, 500);
+    ESP_ERROR_CHECK(esp_timer_start_once(Turn_Off_timer, onTime));
+
+    ESP_ERROR_CHECK(esp_timer_delete(Turn_On_timer));
+}
+
+static void Turn_Off_callback(void *arg)
+{
+    digitalWrite(FrontHeaterCTRL, LOW);
+    digitalWrite(RearHeaterCTRL, LOW);
+    zeroCrossed = false;
+    ESP_ERROR_CHECK(esp_timer_delete(Turn_Off_timer));
+}
+
+static void nop_callback(void *arg)
+{
+    zeroCrossed = false;
+    ESP_ERROR_CHECK(esp_timer_delete(Nop_timer));
+}
+
 void IRAM_ATTR zerocrossCallbackAZ()
 {
-    zeroCrossed = true;
+    //portENTER_CRITICAL_ISR(&timerMux);
+
+    //portEXIT_CRITICAL_ISR(&timerMux);
+    //outputSet    IsOn
+    if (!zeroCrossed)
+    {
+        zeroCrossed = true;
+        if (FrontHeatDelayUs == fullyOffDelay)
+        {
+            digitalWrite(FrontHeaterCTRL, LOW);
+            digitalWrite(RearHeaterCTRL, LOW);
+
+            esp_timer_create_args_t Nop_timer_args;
+            Nop_timer_args.callback = &nop_callback;
+            Nop_timer_args.name = "OffNop";
+            ESP_ERROR_CHECK(esp_timer_create(&Nop_timer_args, &Nop_timer));
+            ESP_ERROR_CHECK(esp_timer_start_once(Nop_timer, 4000)); //debounce timer
+        }
+        else if (FrontHeatDelayUs == fullyOnDelay)
+        {
+            digitalWrite(FrontHeaterCTRL, HIGH);
+            digitalWrite(RearHeaterCTRL, HIGH);
+
+            esp_timer_create_args_t Nop_timer_args;
+            Nop_timer_args.callback = &nop_callback;
+            Nop_timer_args.name = "OffNop";
+            ESP_ERROR_CHECK(esp_timer_create(&Nop_timer_args, &Nop_timer));
+            ESP_ERROR_CHECK(esp_timer_start_once(Nop_timer, 4000));
+        }
+        else
+        {
+            esp_timer_create_args_t Turn_On_timer_args;
+            Turn_On_timer_args.callback = &Turn_On_callback;
+            Turn_On_timer_args.name = "TurnOn";
+            ESP_ERROR_CHECK(esp_timer_create(&Turn_On_timer_args, &Turn_On_timer));
+            ESP_ERROR_CHECK(esp_timer_start_once(Turn_On_timer, FrontHeatDelayUs));
+        }
+    }
 }
 
 void setup()
@@ -361,10 +493,12 @@ void setup()
     Serial.println(WIFIssid);
 
     //connect to your local wi-fi network
-    WiFi.begin(WIFIssid, WIFIpassword);
+    //WiFi.begin(WIFIssid, WIFIpassword);
+    WiFi.softAP(WIFIapssid, WIFIappassword);
 
+    IPAddress apIP = WiFi.softAPIP();
     //check wi-fi is connected to wi-fi network
-    const TickType_t xDelay = 15000 / portTICK_PERIOD_MS;
+    /*  const TickType_t xDelay = 15000 / portTICK_PERIOD_MS;
     TickType_t start = xTaskGetTickCount();
     while (WiFi.status() != WL_CONNECTED)
     {
@@ -375,14 +509,17 @@ void setup()
         {
             ESP.restart();
         }
-    }
+    } */
     Serial.println("");
     Serial.println("WiFi connected..!");
     Serial.print("Got IP: ");
-    Serial.println(WiFi.localIP());
+    Serial.println(apIP);
 
-    if (!MDNS.begin(WIFI_HOST))
-    { //http://esp32.local
+    dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+    dnsServer.start(DNS_PORT, "*", apIP);
+
+    if (!MDNS.begin(WIFI_HOST)) //catbox
+    {                           //http://catbox.local
         Serial.println("Error setting up MDNS responder!");
         while (1)
         {
@@ -399,19 +536,17 @@ void setup()
     server.onNotFound(handle_NotFound);
 
     server.begin();
-    MDNS.addService("http", "tcp", 80);
-    MDNS.addServiceTxt("http", "tcp", "prop1", "test");
-    // MDNS.addServiceTxt("http", "tcp", "prop2", WIFI_HOST);
-    Serial.println("HTTP server started");
 
     attachInterrupt(zcdPin, zerocrossCallbackAZ, RISING);
 
     xTimers[FT_id] = xTimerCreate("MeasureAZTemp", measureFrontTempTicks, pdTRUE, (void *)FT_id, TimerCallback);
-    xTimers[RT_id] = xTimerCreate("MeasureELTemp", measureRearTempTicks, pdTRUE, (void *)RT_id, TimerCallback);
+    xTimers[AT_id] = xTimerCreate("MeasureELTemp", measureAmbientTempTicks, pdTRUE, (void *)AT_id, TimerCallback);
     xTimers[Calculate_id] = xTimerCreate("MeasureELTemp", DoCalculateTicks, pdTRUE, (void *)Calculate_id, TimerCallback);
     StartMyTimer(xTimers[Calculate_id]);
+    delay(333);
     StartMyTimer(xTimers[FT_id]);
-    StartMyTimer(xTimers[RT_id]);
+    delay(333);
+    StartMyTimer(xTimers[AT_id]);
 
     xTaskCreate(
         collectData,    // Function that should be called
@@ -432,6 +567,7 @@ void setup()
 }
 void loop()
 {
+    dnsServer.processNextRequest();
     server.handleClient();
-    delay(50);
+    vTaskDelay(50);
 }

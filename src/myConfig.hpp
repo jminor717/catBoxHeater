@@ -17,19 +17,18 @@
 #define Reset 17
 
 
-#define zcdPin 36
+#define zcdPin 34
 
 #define FrontHeaterCTRL 26
 #define RearHeaterCTRL 27
 
-#define FrontTemp 4
-#define RearTemp 13
-#define AmbientTemp 16
+#define AmbientTemp 4
+#define FrontTemp 13
 //config
 
-//#define WIFIssid "catFi"
+#define WIFIapssid "catFi"
 #define WIFIssid "Pretty fly for a wifi"
-//#define WIFIpassword "123456789"
+#define WIFIappassword "123456789"
 #define WIFIpassword "JRMinor1!"
 
 #define WIFI_HOST "catbox"

@@ -75,9 +75,13 @@ int32_t Tempbuffer::GetRunningAverage()
         int64_t sum = 0;
         for (uint32_t i = 0; i < this->size; i++)
         {
+            //Serial.print(", ");
+           // Serial.print(buffer[i]);
             sum += this->buffer[i];
         }
-        return (int32_t)(sum / this->size); // return (uint16_t)(((sum / this->size) & 0x00ffff00) > 8);
+       // Serial.print("    , ");
+       // Serial.println((int32_t)(sum / this->size));
+        return (int32_t)(sum / this->size);
     }
     else
         return 0;

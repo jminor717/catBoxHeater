@@ -1,0 +1,3 @@
+[submodule "lib/DNSServer---esp32"]
+	path = lib/DNSServer---esp32
+	url = git@github.com:zhouhan0126/DNSServer---esp32.git
